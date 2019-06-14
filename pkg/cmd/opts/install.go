@@ -13,8 +13,8 @@ import (
 	"text/template"
 	"time"
 
-	randomdata "github.com/Pallinder/go-randomdata"
-	filemutex "github.com/alexflint/go-filemutex"
+	"github.com/Pallinder/go-randomdata"
+	"github.com/alexflint/go-filemutex"
 	"github.com/blang/semver"
 	jenkinsv1 "github.com/jenkins-x/jx/pkg/apis/jenkins.io/v1"
 	"github.com/jenkins-x/jx/pkg/cloud"
@@ -23,7 +23,6 @@ import (
 	"github.com/jenkins-x/jx/pkg/gits"
 	"github.com/jenkins-x/jx/pkg/helm"
 	"github.com/jenkins-x/jx/pkg/kube"
-	"github.com/jenkins-x/jx/pkg/kube/cluster"
 	"github.com/jenkins-x/jx/pkg/kube/services"
 	"github.com/jenkins-x/jx/pkg/log"
 	"github.com/jenkins-x/jx/pkg/maven"
@@ -1858,10 +1857,7 @@ func (o *CommonOptions) installExternalDNSGKE() error {
 		return fmt.Errorf("cannot find a dev team namespace to get existing exposecontroller config from. %v", err)
 	}
 
-	clusterName, err := cluster.Name(o.Kube())
-	if err != nil {
-		return errors.Wrap(err, "failed to get clusterName")
-	}
+	clusterName := kube.ClusterName
 
 	err = o.helm.AddRepo(kube.ChartOwnerExternalDNS, kube.ChartURLExternalDNS, "", "")
 	if err != nil {
