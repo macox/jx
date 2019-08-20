@@ -162,6 +162,11 @@ func (o *StepVerifyEnvironmentsOptions) prDevEnvironment(gitRepoName string, env
 		return errors.Wrap(err, "failed to modify dev environment config")
 	}
 
+	err = modifyRepoOwners(dir)
+	if err != nil {
+		return errors.Wrap(err, "failed to modify owners file")
+	}
+
 	// Add a remote for the user that references the boot config that they originally used
 	err = o.Git().SetRemoteURL(dir, "jenkins-x", fromGitURL)
 	if err != nil {
@@ -221,6 +226,40 @@ func modifyPipelineGitEnvVars(dir string) error {
 		err = projectConf.SaveConfig(fileName)
 		if err != nil {
 			return errors.Wrapf(err, "failed to write to %s", fileName)
+		}
+	}
+	return nil
+}
+
+func modifyRepoOwners(dir string) error {
+	configDir, err := util.ConfigDir()
+	if err != nil {
+		return errors.Wrap(err, "failed to get config dir")
+	}
+	configService, err := auth.NewFileAuthConfigService(filepath.Join(configDir, auth.GitAuthConfigFile))
+	if err != nil {
+		return errors.Wrap(err, "failed to create new git file auth config service")
+	}
+	gitConfig, err := configService.LoadConfig()
+	if err != nil {
+		return errors.Wrap(err, "failed to load git auth config")
+	}
+	user := gitConfig.DefaultUsername
+	if user == "" {
+		user = gitConfig.PipeLineUsername
+	}
+
+	if user != "" {
+		err = os.Remove(filepath.Join(dir, "OWNERS"))
+		if err != nil {
+			return errors.Wrap(err, "failed to remove OWNERS file")
+		}
+
+		ownersFile, err := os.Create(filepath.Join(dir, "OWNERS"))
+		owners := fmt.Sprintf("approvers:\n- %s\nreviewers:\n- %s", user, user)
+		_, err = ownersFile.WriteString(owners)
+		if err != nil {
+			ownersFile.Close()
 		}
 	}
 	return nil
