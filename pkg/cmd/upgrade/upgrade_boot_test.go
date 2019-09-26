@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sigs.k8s.io/yaml"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,25 +36,77 @@ func TestDetermineBootConfigURL(t *testing.T) {
 	o := TestUpgradeBootOptions{}
 	o.setup()
 
-	vs, err := o.requirementsVersionStream()
+	vs, err := o.determineVersionStreamConfig()
 	require.NoError(t, err, "could not get requirements version stream")
 
-	URL, err := determineBootConfigURL(vs.URL)
+	URL, err := o.determineBootConfigURL(vs.URL)
 	require.NoError(t, err, "could not determine boot config URL")
 	assert.Equal(t, config.DefaultBootRepository, URL, "DetermineBootConfigURL")
 }
 
-func TestRequirementsVersionStream(t *testing.T) {
+func TestDetermineBootConfigURLNonDefault(t *testing.T) {
 	t.Parallel()
 
 	o := TestUpgradeBootOptions{}
 	o.setup()
 
-	vs, err := o.requirementsVersionStream()
+	o.GitURL = "https://github.com/my-boot-config.git"
+
+	vs, err := o.determineVersionStreamConfig()
 	require.NoError(t, err, "could not get requirements version stream")
 
-	assert.Equal(t, "2367726d02b8c", vs.Ref, "RequirementsVersionStream Ref")
-	assert.Equal(t, "https://github.com/jenkins-x/jenkins-x-versions.git", vs.URL, "RequirementsVersionStream URL")
+	URL, err := o.determineBootConfigURL(vs.URL)
+	require.NoError(t, err, "could not determine boot config URL")
+	assert.Equal(t, o.GitURL, URL, "DetermineBootConfigURL")
+}
+
+func TestDetermineRequirementsVersionStreamConfig(t *testing.T) {
+	t.Parallel()
+
+	o := TestUpgradeBootOptions{}
+	o.setup()
+
+	vs, err := o.determineVersionStreamConfig()
+	require.NoError(t, err, "could not get requirements version stream")
+
+	assert.Equal(t, "2367726d02b8c", vs.Ref, "DetermineVersionStreamConfig Ref")
+	assert.Equal(t, "https://github.com/jenkins-x/jenkins-x-versions.git", vs.URL, "DetermineVersionStreamConfig URL")
+}
+
+func TestSuppliedVersionStreamConfig(t *testing.T) {
+	t.Parallel()
+
+	o := TestUpgradeBootOptions{}
+	o.setup()
+
+	o.VersionStreamRef = "333333333"
+	o.VersionStreamURL = "https://github.com/my-version-stream.git"
+
+	vs, err := o.determineVersionStreamConfig()
+	require.NoError(t, err, "could not get requirements version stream")
+
+	assert.Equal(t, o.VersionStreamRef, vs.Ref, "DetermineVersionStreamConfig Ref")
+	assert.Equal(t, o.VersionStreamURL, vs.URL, "DetermineVersionStreamConfig URL")
+}
+
+func TestLoadRequirementsConfig(t *testing.T) {
+	t.Parallel()
+
+	o := TestUpgradeBootOptions{}
+	o.setup()
+
+	reqs, _, err := o.loadRequirementsConfig()
+	require.NoError(t, err, "could not get requirements config")
+
+	requirementsFile, err := os.Open(filepath.Join(o.UpgradeBootOptions.Dir, "jx-requirements.yml"))
+	require.NoError(t, err, "failed to open test requirements file")
+	data, _ := ioutil.ReadAll(requirementsFile)
+	var testReqs config.RequirementsConfig
+	err = yaml.Unmarshal(data, &testReqs)
+	require.NoError(t, err, "failed to unmarshal test requirements file")
+
+	assert.Equal(t, testReqs.Cluster.ProjectID, reqs.Cluster.ProjectID, "LoadRequirementsConfig ProjectID")
+	assert.Equal(t, testReqs.VersionStream.Ref, reqs.VersionStream.Ref, "LoadRequirementsConfig Ref")
 }
 
 func TestUpdateVersionStreamRef(t *testing.T) {
@@ -73,7 +126,7 @@ func TestUpdateVersionStreamRef(t *testing.T) {
 	err := o.updateVersionStreamRef("22222222")
 	require.NoError(t, err, "could not update version stream ref")
 
-	vs, err := o.requirementsVersionStream()
+	vs, err := o.determineVersionStreamConfig()
 	require.NoError(t, err, "could not get requirements version stream")
 	assert.Equal(t, "22222222", vs.Ref, "UpdateVersionStreamRef Ref")
 }

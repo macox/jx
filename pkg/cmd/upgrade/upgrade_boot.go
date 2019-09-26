@@ -23,7 +23,10 @@ import (
 // UpgradeBootOptions options for the command
 type UpgradeBootOptions struct {
 	*opts.CommonOptions
-	Dir string
+	GitURL           string
+	VersionStreamURL string
+	VersionStreamRef string
+	Dir              string
 }
 
 var (
@@ -55,6 +58,9 @@ func NewCmdUpgradeBoot(commonOpts *opts.CommonOptions) *cobra.Command {
 			helper.CheckErr(err)
 		},
 	}
+	cmd.Flags().StringVarP(&options.GitURL, "git-url", "u", "", "override the Git clone URL for the JX Boot source to start from, ignoring the versions stream. Normally specified with git-ref as well")
+	cmd.Flags().StringVarP(&options.VersionStreamURL, "versions-repo", "", "", "the bootstrap URL for the versions repo. Once the boot config is cloned, the repo will be then read from the jx-requirements.yaml")
+	cmd.Flags().StringVarP(&options.VersionStreamRef, "versions-ref", "", "", "the bootstrap ref for the versions repo. Once the boot config is cloned, the repo will be then read from the jx-requirements.yaml")
 	cmd.Flags().StringVarP(&options.Dir, "dir", "d", "", "the directory to look for the Jenkins X Pipeline and requirements")
 	return cmd
 }
@@ -73,7 +79,7 @@ func (o *UpgradeBootOptions) Run() error {
 		}
 	}
 
-	reqsVersionStream, err := o.requirementsVersionStream()
+	reqsVersionStream, err := o.determineVersionStreamConfig()
 	if err != nil {
 		return errors.Wrap(err, "failed to get requirements version stream")
 	}
@@ -91,7 +97,7 @@ func (o *UpgradeBootOptions) Run() error {
 		return errors.Wrap(err, "failed to checkout upgrade_branch")
 	}
 
-	bootConfigURL, err := determineBootConfigURL(reqsVersionStream.URL)
+	bootConfigURL, err := o.determineBootConfigURL(reqsVersionStream.URL)
 	if err != nil {
 		return errors.Wrap(err, "failed to determine boot configuration URL")
 	}
@@ -118,36 +124,71 @@ func (o *UpgradeBootOptions) Run() error {
 	return nil
 }
 
-func determineBootConfigURL(versionStreamURL string) (string, error) {
-	var bootConfigURL string
-	if versionStreamURL == config.DefaultVersionsURL {
-		bootConfigURL = config.DefaultBootRepository
-	}
-	if versionStreamURL == config.DefaultCloudBeesVersionsURL {
-		bootConfigURL = config.DefaultCloudBeesBootRepository
-	}
+func (o *UpgradeBootOptions) determineBootConfigURL(versionStreamURL string) (string, error) {
+	if o.GitURL == "" {
+		var bootConfigURL string
+		if versionStreamURL == config.DefaultVersionsURL {
+			bootConfigURL = config.DefaultBootRepository
+		}
+		if versionStreamURL == config.DefaultCloudBeesVersionsURL {
+			bootConfigURL = config.DefaultCloudBeesBootRepository
+		}
 
-	if bootConfigURL == "" {
-		return "", fmt.Errorf("unable to determine default boot config URL")
+		if bootConfigURL == "" {
+			return "", fmt.Errorf("unable to determine default boot config URL")
+		}
+		log.Logger().Infof("using default boot config %s", bootConfigURL)
+		return bootConfigURL, nil
 	}
-	log.Logger().Infof("using default boot config %s", bootConfigURL)
-	return bootConfigURL, nil
+	return o.GitURL, nil
 }
 
-func (o *UpgradeBootOptions) requirementsVersionStream() (*config.VersionStreamConfig, error) {
+func (o *UpgradeBootOptions) determineVersionStreamConfig() (*config.VersionStreamConfig, error) {
+	versionStreamConfig := config.VersionStreamConfig{}
+
+	if o.VersionStreamURL == "" && o.VersionStreamRef == "" {
+		requirements, _, err := o.loadRequirementsConfig()
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to load requirements config")
+		}
+		versionStreamConfig = requirements.VersionStream
+	} else {
+		versionStreamConfig.Ref = o.VersionStreamRef
+		versionStreamConfig.URL = o.VersionStreamURL
+	}
+
+	if versionStreamConfig.URL == "" || versionStreamConfig.Ref == "" {
+		log.Logger().Warnf("Incomplete version stream reference %s @ %s", versionStreamConfig.URL, versionStreamConfig.Ref)
+		versionStreamConfig = defaultVersionStreamConfig()
+	}
+	return &versionStreamConfig, nil
+}
+
+func defaultVersionStreamConfig() config.VersionStreamConfig {
+	versionStreamConfig := config.VersionStreamConfig{}
+	if config.LoadActiveInstallProfile() == config.CloudBeesProfile {
+		versionStreamConfig.Ref = config.DefaultCloudBeesVersionsRef
+		versionStreamConfig.URL = config.DefaultVersionsURL
+	} else {
+		versionStreamConfig.Ref = config.DefaultVersionsRef
+		versionStreamConfig.URL = config.DefaultVersionsURL
+	}
+	return versionStreamConfig
+}
+
+func (o *UpgradeBootOptions) loadRequirementsConfig() (*config.RequirementsConfig, string, error) {
 	requirements, requirementsFile, err := config.LoadRequirementsConfig(o.Dir)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to load requirements config %s", requirementsFile)
+		return nil, "", errors.Wrapf(err, "failed to load requirements config from %s", o.Dir)
 	}
 	exists, err := util.FileExists(requirementsFile)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to check if file %s exists", requirementsFile)
+		return nil, "", errors.Wrapf(err, "failed to check if file %s exists", requirementsFile)
 	}
 	if !exists {
-		return nil, fmt.Errorf("no requirements file %s ensure you are running this command inside a GitOps clone", requirementsFile)
+		return nil, "", fmt.Errorf("no requirements file %s ensure you are running this command inside a GitOps clone", requirementsFile)
 	}
-	reqsVersionSteam := requirements.VersionStream
-	return &reqsVersionSteam, nil
+	return requirements, requirementsFile, nil
 }
 
 func (o *UpgradeBootOptions) upgradeAvailable(versionStreamURL string, versionStreamRef string, upgradeRef string) (string, error) {
@@ -186,9 +227,9 @@ func (o *UpgradeBootOptions) checkoutNewBranch() (string, error) {
 }
 
 func (o *UpgradeBootOptions) updateVersionStreamRef(upgradeRef string) error {
-	requirements, requirementsFile, err := config.LoadRequirementsConfig(o.Dir)
+	requirements, requirementsFile, err := o.loadRequirementsConfig()
 	if err != nil {
-		return errors.Wrapf(err, "failed to load requirements file %s", requirementsFile)
+		return errors.Wrap(err, "failed to load requirements config")
 	}
 
 	if requirements.VersionStream.Ref != upgradeRef {
